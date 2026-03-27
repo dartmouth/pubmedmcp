@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pubmedmcp
+  labels:
+    app: pubmedmcp
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pubmedmcp
+  template:
+    metadata:
+      labels:
+        app: pubmedmcp
+    spec:
+      containers:
+        - name: pubmedmcp
+          image: pubmedmcp:latest # Replace with your registry image
+          ports:
+            - containerPort: 8000
+          env:
+            - name: TRANSPORT
+              value: streamable-http
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 256Mi
+              cpu: 500m

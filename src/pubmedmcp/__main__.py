@@ -1,3 +1,4 @@
+import os
 from typing import Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -6,7 +7,9 @@ from pubmedclient.sdk import efetch, esearch, pubmedclient_client
 from pydantic import BaseModel, Field
 
 # Create an MCP server
-mcp = FastMCP("PubMedMCP")
+# stateless_http and json_response only affect streamable-http transport;
+# they are no-ops for stdio transport.
+mcp = FastMCP("PubMedMCP", stateless_http=True, json_response=True)
 
 
 class SearchAbstractsRequest(BaseModel):
@@ -45,10 +48,10 @@ class SearchAbstractsRequest(BaseModel):
 
     term: str = Field(
         ...,
-        description="""Entrez text query. All special characters must be URL encoded. 
-        Spaces may be replaced by '+' signs. For very long queries (more than several 
-        hundred characters), consider using an HTTP POST call. See PubMed or Entrez 
-        help for information about search field descriptions and tags. Search fields 
+        description="""Entrez text query. All special characters must be URL encoded.
+        Spaces may be replaced by '+' signs. For very long queries (more than several
+        hundred characters), consider using an HTTP POST call. See PubMed or Entrez
+        help for information about search field descriptions and tags. Search fields
         and tags are database specific.""",
     )
 
@@ -67,7 +70,7 @@ class SearchAbstractsRequest(BaseModel):
     )
     field: Optional[str] = Field(
         None,
-        description="""Search field to limit entire search. Equivalent to adding [field] 
+        description="""Search field to limit entire search. Equivalent to adding [field]
         to term.""",
     )
     datetype: Optional[Literal["mdat", "pdat", "edat"]] = Field(
@@ -80,17 +83,17 @@ class SearchAbstractsRequest(BaseModel):
     )
     reldate: Optional[int] = Field(
         None,
-        description="""When set to n, returns items with datetype within the last n 
+        description="""When set to n, returns items with datetype within the last n
         days.""",
     )
     mindate: Optional[str] = Field(
         None,
-        description="""Start date for date range. Format: YYYY/MM/DD, YYYY/MM, or YYYY. 
+        description="""Start date for date range. Format: YYYY/MM/DD, YYYY/MM, or YYYY.
         Must be used with maxdate.""",
     )
     maxdate: Optional[str] = Field(
         None,
-        description="""End date for date range. Format: YYYY/MM/DD, YYYY/MM, or YYYY. 
+        description="""End date for date range. Format: YYYY/MM/DD, YYYY/MM, or YYYY.
         Must be used with mindate.""",
     )
 
@@ -143,8 +146,37 @@ async def search_abstracts(request: SearchAbstractsRequest) -> str:
         return fetch_response
 
 
+def _run_streamable_http(host: str, port: int) -> None:
+    """Run the MCP server with streamable-http transport behind a Starlette app
+    that also exposes a /health endpoint for Kubernetes probes."""
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Mount, Route
+
+    async def health(request):
+        return JSONResponse({"status": "ok"})
+
+    app = Starlette(
+        routes=[
+            Route("/health", health),
+            Mount("/", app=mcp.streamable_http_app()),
+        ],
+    )
+
+    import uvicorn
+
+    uvicorn.run(app, host=host, port=port)
+
+
 def main():
-    mcp.run()
+    transport = os.environ.get("TRANSPORT", "stdio")
+
+    if transport == "streamable-http":
+        host = os.environ.get("HOST", "0.0.0.0")
+        port = int(os.environ.get("PORT", "8000"))
+        _run_streamable_http(host, port)
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
