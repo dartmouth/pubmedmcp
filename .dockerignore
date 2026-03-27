@@ -1,0 +1,11 @@
+.venv
+__pycache__
+*.py[oc]
+.git
+.github
+.pre-commit-config.yaml
+dist/
+build/
+*.egg-info
+plans/
+k8s/

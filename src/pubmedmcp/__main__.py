@@ -1,12 +1,23 @@
+import os
 from typing import Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
 from pubmedclient.models import Db, EFetchRequest, ESearchRequest
 from pubmedclient.sdk import efetch, esearch, pubmedclient_client
 from pydantic import BaseModel, Field
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 # Create an MCP server
-mcp = FastMCP("PubMedMCP")
+# stateless_http and json_response only affect streamable-http transport;
+# they are no-ops for stdio transport.
+mcp = FastMCP("PubMedMCP", stateless_http=True, json_response=True)
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request) -> JSONResponse:
+    """Health check endpoint for Kubernetes liveness/readiness probes."""
+    return JSONResponse({"status": "healthy", "service": "pubmedmcp"})
 
 
 class SearchAbstractsRequest(BaseModel):
@@ -45,10 +56,10 @@ class SearchAbstractsRequest(BaseModel):
 
     term: str = Field(
         ...,
-        description="""Entrez text query. All special characters must be URL encoded. 
-        Spaces may be replaced by '+' signs. For very long queries (more than several 
-        hundred characters), consider using an HTTP POST call. See PubMed or Entrez 
-        help for information about search field descriptions and tags. Search fields 
+        description="""Entrez text query. All special characters must be URL encoded.
+        Spaces may be replaced by '+' signs. For very long queries (more than several
+        hundred characters), consider using an HTTP POST call. See PubMed or Entrez
+        help for information about search field descriptions and tags. Search fields
         and tags are database specific.""",
     )
 
@@ -67,7 +78,7 @@ class SearchAbstractsRequest(BaseModel):
     )
     field: Optional[str] = Field(
         None,
-        description="""Search field to limit entire search. Equivalent to adding [field] 
+        description="""Search field to limit entire search. Equivalent to adding [field]
         to term.""",
     )
     datetype: Optional[Literal["mdat", "pdat", "edat"]] = Field(
@@ -80,17 +91,17 @@ class SearchAbstractsRequest(BaseModel):
     )
     reldate: Optional[int] = Field(
         None,
-        description="""When set to n, returns items with datetype within the last n 
+        description="""When set to n, returns items with datetype within the last n
         days.""",
     )
     mindate: Optional[str] = Field(
         None,
-        description="""Start date for date range. Format: YYYY/MM/DD, YYYY/MM, or YYYY. 
+        description="""Start date for date range. Format: YYYY/MM/DD, YYYY/MM, or YYYY.
         Must be used with maxdate.""",
     )
     maxdate: Optional[str] = Field(
         None,
-        description="""End date for date range. Format: YYYY/MM/DD, YYYY/MM, or YYYY. 
+        description="""End date for date range. Format: YYYY/MM/DD, YYYY/MM, or YYYY.
         Must be used with mindate.""",
     )
 
@@ -144,7 +155,14 @@ async def search_abstracts(request: SearchAbstractsRequest) -> str:
 
 
 def main():
-    mcp.run()
+    transport = os.environ.get("TRANSPORT", "stdio")
+
+    if transport == "streamable-http":
+        mcp.settings.host = os.environ.get("HOST", "0.0.0.0")
+        mcp.settings.port = int(os.environ.get("PORT", "8000"))
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
