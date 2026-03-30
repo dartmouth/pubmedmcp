@@ -4,7 +4,6 @@ from typing import Literal, Optional
 from mcp.server.fastmcp import FastMCP
 from pubmedclient.models import Db, EFetchRequest, ESearchRequest
 from pubmedclient.sdk import efetch, esearch, pubmedclient_client
-from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -20,129 +19,62 @@ async def health_check(request: Request) -> JSONResponse:
     return JSONResponse({"status": "healthy", "service": "pubmedmcp"})
 
 
-class SearchAbstractsRequest(BaseModel):
-    """
-    Request parameters for NCBI ESearch API for searching abstracts on the PubMed database.
-
-    Functions:
-        - Provides a list of abstracts matching a text query
-
-    Examples:
-        >>> # Basic search in PubMed for 'asthma' articles abstracts
-        >>> SearchAbstractsRequest(term="asthma")
-
-        >>> # Search with publication date range
-        >>> ESearchRequest(
-        ...     term="asthma",
-        ...     mindate="2020/01/01",
-        ...     maxdate="2020/12/31",
-        ...     datetype="pdat"
-        ... )
-
-        >>> # Search with field restriction
-        >>> ESearchRequest(term="asthma[title]")
-        >>> # Or equivalently:
-        >>> ESearchRequest(term="asthma", field="title")
-
-        >>> # Search with proximity operator
-        >>> ESearchRequest(term='"asthma treatment"[Title:~3]')
-
-        >>> # Sort results by publication date
-        >>> ESearchRequest(
-        ...     term="asthma",
-        ...     sort="pub_date"
-        ... )
-    """
-
-    term: str = Field(
-        ...,
-        description="""Entrez text query. All special characters must be URL encoded.
-        Spaces may be replaced by '+' signs. For very long queries (more than several
-        hundred characters), consider using an HTTP POST call. See PubMed or Entrez
-        help for information about search field descriptions and tags. Search fields
-        and tags are database specific.""",
-    )
-
-    retmax: Optional[int] = Field(
-        20,
-        description="""Number of UIDs to return (default=20, max=10000).""",
-    )
-
-    sort: Optional[str] = Field(
-        None,
-        description="""Sort method for results. PubMed values:
-        - pub_date: descending sort by publication date
-        - Author: ascending sort by first author
-        - JournalName: ascending sort by journal name
-        - relevance: default sort order ("Best Match")""",
-    )
-    field: Optional[str] = Field(
-        None,
-        description="""Search field to limit entire search. Equivalent to adding [field]
-        to term.""",
-    )
-    datetype: Optional[Literal["mdat", "pdat", "edat"]] = Field(
-        None,
-        description="""Type of date used to limit search:
-        - mdat: modification date
-        - pdat: publication date
-        - edat: Entrez date
-        Generally databases have only two allowed values.""",
-    )
-    reldate: Optional[int] = Field(
-        None,
-        description="""When set to n, returns items with datetype within the last n
-        days.""",
-    )
-    mindate: Optional[str] = Field(
-        None,
-        description="""Start date for date range. Format: YYYY/MM/DD, YYYY/MM, or YYYY.
-        Must be used with maxdate.""",
-    )
-    maxdate: Optional[str] = Field(
-        None,
-        description="""End date for date range. Format: YYYY/MM/DD, YYYY/MM, or YYYY.
-        Must be used with mindate.""",
-    )
-
-
-# add a tool
 @mcp.tool()
-async def search_abstracts(request: SearchAbstractsRequest) -> str:
-    """Search abstracts on PubMed database based on the request parameters.
+async def search_abstracts(
+    term: str,
+    retmax: int = 20,
+    sort: Optional[Literal["pub_date", "Author", "JournalName", "relevance"]] = None,
+    field: Optional[str] = None,
+    datetype: Optional[Literal["mdat", "pdat", "edat"]] = None,
+    reldate: Optional[int] = None,
+    mindate: Optional[str] = None,
+    maxdate: Optional[str] = None,
+) -> str:
+    """Search PubMed for article abstracts matching a query.
 
-    While it returns a free-form text in practice this is a list of strings containing:
-
-    * the title of the article
-    * the abstract content
-    * the authors
-    * the journal name
-    * the publication date
-    * the DOI
-    * the PMID
+    Returns a list of matching articles, each containing the title, abstract,
+    authors, journal name, publication date, DOI, and PMID.
 
     Args:
-        request: SearchAbstractsRequest
+        term: PubMed search query (e.g. "SARS-CoV-2", "asthma[title]",
+              "cancer AND immunotherapy"). Supports PubMed Advanced Search syntax
+              including field tags like [title], [author], and Boolean operators.
+        retmax: Maximum number of articles to return (default 20, max 10000).
+        sort: Sort order for results. Options: "pub_date" (newest first),
+              "Author" (first author A-Z), "JournalName" (journal A-Z),
+              "relevance" (best match, default).
+        field: Restrict search to a specific field (e.g. "title", "author",
+               "journal"). Equivalent to appending [field] to the term.
+        datetype: Type of date to filter by: "mdat" (modification date),
+                  "pdat" (publication date), or "edat" (Entrez date).
+        reldate: Return only articles with datetype within the last N days.
+        mindate: Start of date range filter (format: YYYY/MM/DD, YYYY/MM,
+                 or YYYY). Must be used together with maxdate.
+        maxdate: End of date range filter (format: YYYY/MM/DD, YYYY/MM,
+                 or YYYY). Must be used together with mindate.
     """
+    # Build the search request from flat parameters
+    search_params: dict = {"term": term, "retmax": retmax}
+    if sort is not None:
+        search_params["sort"] = sort
+    if field is not None:
+        search_params["field"] = field
+    if datetype is not None:
+        search_params["datetype"] = datetype
+    if reldate is not None:
+        search_params["reldate"] = reldate
+    if mindate is not None:
+        search_params["mindate"] = mindate
+    if maxdate is not None:
+        search_params["maxdate"] = maxdate
 
     async with pubmedclient_client() as client:
         # perform a search and get the ids
-        search_request = ESearchRequest(db=Db.PUBMED, **request.model_dump())
+        search_request = ESearchRequest(db=Db.PUBMED, **search_params)
         search_response = await esearch(client, search_request)
         ids = search_response.esearchresult.idlist
 
-        # get the abstracts of each ids
-        # in practice it returns something like the following:
-        #
-        # 1. Allergy Asthma Proc. 2025 Jan 1;46(1):1-3. doi: 10.2500/aap.2025.46.240102.
-        #
-        # Exploring mast cell disorders: Tryptases, hereditary alpha-tryptasemia, and MCAS
-        # treatment approaches.
-        # Bellanti JA, Settipane RA.
-        # DOI: 10.2500/aap.2025.46.240102
-        # PMID: 39741377
-        #
-        # 2. ...
+        # fetch the abstracts for each id
         fetch_request = EFetchRequest(
             db=Db.PUBMED,
             id=",".join(ids),
